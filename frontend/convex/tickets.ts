@@ -1,6 +1,6 @@
 import { query, internalQuery, internalMutation } from "./_generated/server";
 import { v } from "convex/values";
-import { ticketStatus } from "./validators";
+import { agentType, ticketStatus } from "./validators";
 
 export const listByEpic = query({
   args: { epicId: v.id("epics") },
@@ -25,4 +25,9 @@ export const approvedForEpic = internalQuery({
 export const setStatus = internalMutation({
   args: { ticketId: v.id("tickets"), status: ticketStatus },
   handler: (ctx, { ticketId, status }) => ctx.db.patch(ticketId, { status }),
+});
+
+export const insertProposed = internalMutation({
+  args: { epicId: v.id("epics"), title: v.string(), body: v.string(), agentType },
+  handler: (ctx, args) => ctx.db.insert("tickets", { ...args, status: "proposed" }),
 });
