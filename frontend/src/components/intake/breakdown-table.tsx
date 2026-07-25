@@ -119,8 +119,8 @@ export function BreakdownTable({ tickets }: { tickets: Ticket[] }) {
                         {ticket.body || "No description yet."}
                       </p>
                       <p className="mt-2 pl-[1.4rem] font-mono text-[11px] text-muted-foreground/60">
-                        {AGENTS[ticket.agentType].role} · toolset{" "}
-                        {AGENTS[ticket.agentType].tools.join(", ")}
+                        {AGENTS[ticket.agentType].role} · focus{" "}
+                        {AGENTS[ticket.agentType].focus.join(", ")}
                       </p>
                     </TableCell>
                   </TableRow>

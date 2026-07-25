@@ -6,10 +6,16 @@ export const listByEpic = query({
   args: { epicId: v.id("epics") },
   handler: async (ctx, { epicId }) => {
     const tickets = await ctx.db
-      .query("tickets").withIndex("by_epic", (q) => q.eq("epicId", epicId)).collect();
-    const ids = new Set(tickets.map((t) => t._id));
-    const runs = await ctx.db.query("runs").collect();
-    return runs.filter((r) => ids.has(r.ticketId));
+      .query("tickets").withIndex("by_epic", (q) => q.eq("epicId", epicId)).take(100);
+
+    // Per-ticket index lookups rather than scanning the whole runs table, so
+    // one epic's board doesn't get slower as other epics accumulate runs.
+    const perTicket = await Promise.all(
+      tickets.map((t) =>
+        ctx.db.query("runs").withIndex("by_ticket", (q) => q.eq("ticketId", t._id)).take(20),
+      ),
+    );
+    return perTicket.flat();
   },
 });
 
@@ -22,7 +28,7 @@ export const create = internalMutation({
 export const finish = internalMutation({
   args: { runId: v.id("runs"), prUrl: v.optional(v.string()), diff: v.optional(v.string()) },
   handler: (ctx, { runId, prUrl, diff }) =>
-    ctx.db.patch(runId, { status: "done", prUrl, diff }),
+    ctx.db.patch("runs", runId, { status: "done", prUrl, diff }),
 });
 
 // PUBLIC, secret-guarded callback for the FastAPI agent service. Finalizes
@@ -42,11 +48,11 @@ export const finishPublic = mutation({
     const patch: { status: "done"; prUrl?: string; diff?: string } = { status: "done" };
     if (prUrl !== undefined) patch.prUrl = prUrl;
     if (diff !== undefined) patch.diff = diff;
-    await ctx.db.patch(runId, patch);
+    await ctx.db.patch("runs", runId, patch);
 
-    const run = await ctx.db.get(runId);
+    const run = await ctx.db.get("runs", runId);
     if (run) {
-      await ctx.db.patch(run.ticketId, { status: "done" });
+      await ctx.db.patch("tickets", run.ticketId, { status: "done" });
     }
   },
 });

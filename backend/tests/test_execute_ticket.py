@@ -8,7 +8,7 @@ from app.agents.repo import NoChangesError, RepoError
 def _patch_common(**overrides):
     """Patch the pieces execute_ticket calls out to, with sane defaults."""
     defaults = dict(
-        clone_and_branch=lambda target_repo, agent_type: ("/tmp/fake-workdir", "agent/swe-abc123"),
+        clone_and_branch=lambda repo_url, agent_type: ("/tmp/fake-workdir", "agent/swe-abc123"),
         run_coding_agent=_async_noop,
         append_message=lambda *a, **k: None,
         finish_run=lambda *a, **k: None,
@@ -22,8 +22,17 @@ async def _async_noop(*_args, **_kwargs):
     return None
 
 
-def _run(ticket_id="ticket_1", run_id="run_1", agent_type="swe", title="Add health endpoint", body="body"):
-    return asyncio.run(agents.execute_ticket(ticket_id, run_id, agent_type, title, body))
+def _run(
+    ticket_id="ticket_1",
+    run_id="run_1",
+    agent_type="swe",
+    title="Add health endpoint",
+    body="body",
+    repo_url="https://github.com/me/fi-demo-a1b2c3.git",
+):
+    return asyncio.run(
+        agents.execute_ticket(ticket_id, run_id, agent_type, title, body, repo_url)
+    )
 
 
 def test_execute_ticket_no_changes_finishes_done_without_pr_or_diff():

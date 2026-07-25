@@ -6,12 +6,50 @@ import { AGENTS, type AgentType, type Effort, type Priority, type TicketStatus }
 // Agents own hue — each specialist reads as its own identity at a glance.
 // Statuses own shape: a pill with a dot, in a lower-saturation palette, so a
 // row never reads as two competing colors.
+// Tailwind can't see interpolated class names, so each hue is written out in
+// full rather than composed from the color name.
 const AGENT_STYLES: Record<AgentType, { tile: string; text: string; lane: string; rail: string }> = {
   ui: {
     tile: "bg-indigo-100 text-indigo-700 ring-indigo-200",
     text: "text-indigo-700",
     lane: "bg-indigo-50/60",
     rail: "bg-indigo-500",
+  },
+  ux: {
+    tile: "bg-violet-100 text-violet-700 ring-violet-200",
+    text: "text-violet-700",
+    lane: "bg-violet-50/60",
+    rail: "bg-violet-500",
+  },
+  swe: {
+    tile: "bg-orange-100 text-orange-700 ring-orange-200",
+    text: "text-orange-700",
+    lane: "bg-orange-50/60",
+    rail: "bg-orange-500",
+  },
+  mobile: {
+    tile: "bg-pink-100 text-pink-700 ring-pink-200",
+    text: "text-pink-700",
+    lane: "bg-pink-50/60",
+    rail: "bg-pink-500",
+  },
+  devops: {
+    tile: "bg-slate-200 text-slate-700 ring-slate-300",
+    text: "text-slate-700",
+    lane: "bg-slate-100/60",
+    rail: "bg-slate-500",
+  },
+  qa: {
+    tile: "bg-teal-100 text-teal-700 ring-teal-200",
+    text: "text-teal-700",
+    lane: "bg-teal-50/60",
+    rail: "bg-teal-500",
+  },
+  security: {
+    tile: "bg-red-100 text-red-700 ring-red-200",
+    text: "text-red-700",
+    lane: "bg-red-50/60",
+    rail: "bg-red-500",
   },
   ml: {
     tile: "bg-rose-100 text-rose-700 ring-rose-200",
@@ -25,11 +63,23 @@ const AGENT_STYLES: Record<AgentType, { tile: string; text: string; lane: string
     lane: "bg-cyan-50/60",
     rail: "bg-cyan-500",
   },
-  swe: {
-    tile: "bg-orange-100 text-orange-700 ring-orange-200",
-    text: "text-orange-700",
-    lane: "bg-orange-50/60",
-    rail: "bg-orange-500",
+  dataeng: {
+    tile: "bg-sky-100 text-sky-700 ring-sky-200",
+    text: "text-sky-700",
+    lane: "bg-sky-50/60",
+    rail: "bg-sky-500",
+  },
+  pm: {
+    tile: "bg-fuchsia-100 text-fuchsia-700 ring-fuchsia-200",
+    text: "text-fuchsia-700",
+    lane: "bg-fuchsia-50/60",
+    rail: "bg-fuchsia-500",
+  },
+  docs: {
+    tile: "bg-stone-200 text-stone-700 ring-stone-300",
+    text: "text-stone-700",
+    lane: "bg-stone-100/60",
+    rail: "bg-stone-500",
   },
 };
 
@@ -50,13 +100,14 @@ export function AgentTile({
 }) {
   return (
     <span
+      title={`${AGENTS[type].name} · ${AGENTS[type].role}`}
       className={cn(
-        "relative inline-flex size-6 shrink-0 items-center justify-center rounded-md font-mono text-[10px] font-semibold uppercase ring-1 ring-inset",
+        "relative inline-flex size-6 shrink-0 items-center justify-center rounded-md font-mono text-[10px] font-semibold tracking-tight uppercase ring-1 ring-inset",
         AGENT_STYLES[type].tile,
         className
       )}
     >
-      {type}
+      {AGENTS[type].code}
       {running && (
         <span className="absolute -top-0.5 -right-0.5 flex size-2">
           <span className="absolute inline-flex size-full animate-ping rounded-full bg-amber-400 opacity-75" />

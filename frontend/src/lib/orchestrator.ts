@@ -1,13 +1,31 @@
-// Domain model for the epic board. Mirrors the schema locked in docs/ctd.md:
+// Domain model for the epic board — the view-model side of the Convex schema
+// locked in docs/ctd.md:
 //   epics    { title, body, status }
 //   tickets  { epicId, title, body, agentType, status }
 //   runs     { ticketId, agentType, status, prUrl?, diff?, log[] }
 //   messages { ticketId, role, content }
 //
-// This file is UI-only seed data — no backend calls. docs/ctd.md asks both
-// sides to build against seeded data so neither dev blocks the other.
+// There is no seed data here any more: every value the board renders comes from
+// Convex through `board-data.ts`. This file holds only the shapes, the agent
+// roster, and the presentation helpers.
 
-export const AGENT_TYPES = ["ui", "ml", "ds", "swe"] as const;
+/** The fixed roster. Must stay in sync with the `agentType` enum in
+ *  `convex/validators.ts` and `AGENT_CONFIGS` in `backend/app/agents/configs.py`
+ *  — the orchestrator SELECTS among these, it never invents capabilities. */
+export const AGENT_TYPES = [
+  "ui",
+  "ux",
+  "swe",
+  "mobile",
+  "devops",
+  "qa",
+  "security",
+  "ml",
+  "ds",
+  "dataeng",
+  "pm",
+  "docs",
+] as const;
 export type AgentType = (typeof AGENT_TYPES)[number];
 
 export const TICKET_STATUSES = [
@@ -42,10 +60,13 @@ export type Ticket = {
   priority: Priority;
   effort: Effort;
   updatedAt: string;
-  /** Percent complete, only meaningful while status is "running". */
-  progress?: number;
+  /** Log lines this ticket's agent has streamed back so far. */
+  steps: number;
   prUrl?: string;
   prNumber?: number;
+  /** Set instead of `prUrl` when the PR hop failed and the agent fell back to
+   *  returning a raw diff (the documented fallback in docs/ctd.md). */
+  diff?: string;
   filesTouched?: string[];
 };
 
@@ -53,248 +74,37 @@ export type Epic = {
   id: string;
   title: string;
   body: string;
-  status: "draft" | "decomposed" | "executing" | "shipped";
-  repo: string;
+  status: string;
+  /** `owner/name` of this epic's repo, or null before the first run creates it. */
+  repo: string | null;
+  repoUrl: string | null;
 };
 
-/** The four pre-built agents. Fixed toolsets — the orchestrator selects, it
- *  does not invent capabilities (hard scope rule in docs/ctd.md). */
+/** Each role is a persona (a system prompt) driving a real Claude Agent SDK
+ *  coding agent. `focus` describes what the persona is for — every agent shares
+ *  the same underlying toolset (Read/Write/Edit/Bash/Grep/Glob), so listing
+ *  per-agent tools here would be fiction. `code` is the ≤3-char form that fits
+ *  the square agent tile. */
 export const AGENTS: Record<
   AgentType,
-  { name: string; role: string; tools: string[] }
+  { name: string; role: string; code: string; focus: string[] }
 > = {
-  ui: {
-    name: "Iris",
-    role: "Interface agent",
-    tools: ["next", "tailwind", "shadcn"],
-  },
-  ml: {
-    name: "Mel",
-    role: "Model agent",
-    tools: ["transformers", "eval-harness"],
-  },
-  ds: {
-    name: "Dez",
-    role: "Data agent",
-    tools: ["duckdb", "pandas", "schema-diff"],
-  },
-  swe: {
-    name: "Sven",
-    role: "Systems agent",
-    tools: ["fastapi", "pytest", "gh-api"],
-  },
+  ui: { name: "Iris", role: "Interface agent", code: "ui", focus: ["components", "layout", "styling"] },
+  ux: { name: "Uma", role: "Experience agent", code: "ux", focus: ["flows", "states", "a11y"] },
+  swe: { name: "Sven", role: "Systems agent", code: "swe", focus: ["services", "apis", "data flow"] },
+  mobile: { name: "Milo", role: "Mobile agent", code: "mob", focus: ["react native", "screens"] },
+  devops: { name: "Dara", role: "Platform agent", code: "ops", focus: ["ci", "pipelines", "infra"] },
+  qa: { name: "Quinn", role: "Quality agent", code: "qa", focus: ["tests", "regressions"] },
+  security: { name: "Sable", role: "Security agent", code: "sec", focus: ["hardening", "authz"] },
+  ml: { name: "Mel", role: "Model agent", code: "ml", focus: ["models", "scoring"] },
+  ds: { name: "Dez", role: "Data agent", code: "ds", focus: ["analysis", "summaries"] },
+  dataeng: { name: "Dane", role: "Pipeline agent", code: "de", focus: ["etl", "ingestion"] },
+  pm: { name: "Pim", role: "Planning agent", code: "pm", focus: ["specs", "breakdown"] },
+  docs: { name: "Dot", role: "Docs agent", code: "doc", focus: ["guides", "reference"] },
 };
 
-export const EPIC: Epic = {
-  id: "epic_1",
-  title: "Realtime chat for Founders Inc",
-  body: "Members need a live chat surface inside the portal: message history, presence, and typing indicators, backed by an API that survives reconnects.",
-  status: "executing",
-  repo: "foundersinc/chat-app",
-};
-
-export const TICKETS: Ticket[] = [
-  {
-    id: "t1",
-    key: "FI-101",
-    epicId: "epic_1",
-    title: "Message thread view with virtualized scroll",
-    body: "Render the message list, group consecutive messages by author, and keep scroll pinned to the newest message.",
-    agentType: "ui",
-    status: "done",
-    priority: "high",
-    effort: "medium",
-    updatedAt: "2026-07-24T20:18:00Z",
-    prUrl: "https://github.com/foundersinc/chat-app/pull/42",
-    prNumber: 42,
-    filesTouched: ["src/components/message-thread.tsx"],
-  },
-  {
-    id: "t2",
-    key: "FI-102",
-    epicId: "epic_1",
-    title: "WebSocket gateway with reconnect backoff",
-    body: "Expose /ws, fan messages out to room subscribers, and reconnect with exponential backoff on drop.",
-    agentType: "swe",
-    status: "running",
-    priority: "high",
-    effort: "large",
-    updatedAt: "2026-07-24T20:31:00Z",
-    progress: 62,
-    filesTouched: ["backend/app/api/ws.py"],
-  },
-  {
-    id: "t3",
-    key: "FI-103",
-    epicId: "epic_1",
-    title: "Presence and typing indicator store",
-    body: "Track who is online per room and expire typing state after 3s of silence.",
-    agentType: "ds",
-    status: "running",
-    priority: "medium",
-    effort: "medium",
-    updatedAt: "2026-07-24T20:30:00Z",
-    progress: 41,
-    filesTouched: ["backend/app/store/presence.py"],
-  },
-  {
-    id: "t4",
-    key: "FI-104",
-    epicId: "epic_1",
-    title: "Toxicity filter on inbound messages",
-    body: "Score each message and hold anything above threshold for review instead of broadcasting it.",
-    agentType: "ml",
-    status: "review",
-    priority: "medium",
-    effort: "medium",
-    updatedAt: "2026-07-24T20:08:00Z",
-    filesTouched: ["backend/app/ml/moderate.py"],
-  },
-  {
-    id: "t5",
-    key: "FI-105",
-    epicId: "epic_1",
-    title: "Composer with attachment drop zone",
-    body: "Text input that grows to four lines, sends on Enter, and accepts dragged images.",
-    agentType: "ui",
-    status: "approved",
-    priority: "medium",
-    effort: "small",
-    updatedAt: "2026-07-24T19:52:00Z",
-  },
-  {
-    id: "t6",
-    key: "FI-106",
-    epicId: "epic_1",
-    title: "Message retention and archive job",
-    body: "Roll messages older than 90 days into cold storage on a nightly schedule.",
-    agentType: "ds",
-    status: "proposed",
-    priority: "low",
-    effort: "large",
-    updatedAt: "2026-07-24T19:35:00Z",
-  },
-  {
-    id: "t7",
-    key: "FI-107",
-    epicId: "epic_1",
-    title: "Unread badge counts per room",
-    body: "Derive unread counts from last-read markers and keep them correct across tabs.",
-    agentType: "swe",
-    status: "proposed",
-    priority: "medium",
-    effort: "small",
-    updatedAt: "2026-07-24T19:34:00Z",
-  },
-  {
-    id: "t8",
-    key: "FI-108",
-    epicId: "epic_1",
-    title: "Smart reply suggestions under the composer",
-    body: "Offer three short replies based on the last message in the thread.",
-    agentType: "ml",
-    status: "proposed",
-    priority: "low",
-    effort: "medium",
-    updatedAt: "2026-07-24T19:33:00Z",
-  },
-];
-
-export const MESSAGES: Message[] = [
-  {
-    id: "m1",
-    ticketId: "t2",
-    role: "system",
-    content: "Run started · agent swe · toolset fastapi, pytest, gh-api",
-    at: "20:28:41",
-  },
-  {
-    id: "m2",
-    ticketId: "t2",
-    role: "agent",
-    content: "Read backend/app/main.py — found existing APIRouter mount.",
-    at: "20:29:02",
-  },
-  {
-    id: "m3",
-    ticketId: "t2",
-    role: "agent",
-    content: "Wrote backend/app/api/ws.py — /ws endpoint with room fan-out.",
-    at: "20:30:15",
-  },
-  {
-    id: "m4",
-    ticketId: "t2",
-    role: "agent",
-    content: "Adding reconnect backoff (250ms → 8s, jittered).",
-    at: "20:31:07",
-  },
-  {
-    id: "m5",
-    ticketId: "t3",
-    role: "system",
-    content: "Run started · agent ds · toolset duckdb, pandas, schema-diff",
-    at: "20:29:50",
-  },
-  {
-    id: "m6",
-    ticketId: "t3",
-    role: "agent",
-    content: "Modeling presence as a TTL keyed on (room, member).",
-    at: "20:30:28",
-  },
-  {
-    id: "m7",
-    ticketId: "t1",
-    role: "system",
-    content: "Run started · agent ui · toolset next, tailwind, shadcn",
-    at: "20:14:03",
-  },
-  {
-    id: "m8",
-    ticketId: "t1",
-    role: "agent",
-    content: "Wrote src/components/message-thread.tsx.",
-    at: "20:16:44",
-  },
-  {
-    id: "m9",
-    ticketId: "t1",
-    role: "agent",
-    content: "Opened PR #42 → foundersinc/chat-app.",
-    at: "20:18:00",
-  },
-  {
-    id: "m10",
-    ticketId: "t1",
-    role: "human",
-    content: "Approved. Scroll anchoring looks right.",
-    at: "20:21:12",
-  },
-  {
-    id: "m11",
-    ticketId: "t4",
-    role: "system",
-    content: "Run started · agent ml · toolset transformers, eval-harness",
-    at: "20:02:19",
-  },
-  {
-    id: "m12",
-    ticketId: "t4",
-    role: "agent",
-    content: "Threshold at 0.82 held back 3 of 500 sample messages.",
-    at: "20:07:35",
-  },
-  {
-    id: "m13",
-    ticketId: "t4",
-    role: "system",
-    content: "Bounced to review — reviewer wants the threshold configurable.",
-    at: "20:08:00",
-  },
-];
-
-/** The approvers who have to sign off before a ticket set can run. */
+/** The approvers who have to sign off before a ticket set can run. This gate is
+ *  frontend-only by design — docs/ctd.md scopes multi-user consensus out. */
 export const APPROVERS = [
   { id: "a1", name: "David N.", initials: "DN", signed: true },
   { id: "a2", name: "Priya R.", initials: "PR", signed: false },

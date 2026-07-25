@@ -1,0 +1,15 @@
+# The Dockerfile does `COPY . .`, so anything not excluded here ends up in the
+# image. Secrets are injected as Railway variables at runtime — they must never
+# be baked into a layer.
+.env
+.env.*
+!.env.example
+
+# Local virtualenv: huge, platform-specific, and rebuilt by `uv sync` anyway.
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+
+.git/

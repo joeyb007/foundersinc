@@ -7,6 +7,9 @@ export default defineSchema({
     title: v.string(),
     body: v.string(),
     status: v.string(),
+    // Each epic gets its own throwaway GitHub repo, created once before the
+    // fan-out. Optional because it doesn't exist until the first run starts.
+    repoUrl: v.optional(v.string()),
   }),
   tickets: defineTable({
     epicId: v.id("epics"),

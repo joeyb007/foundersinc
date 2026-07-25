@@ -1,37 +1,29 @@
 "use client";
 
 import { GitPullRequestArrow } from "lucide-react";
+import { useMemo } from "react";
 
-import { Progress } from "@/components/ui/progress";
 import { cn } from "@/lib/utils";
 import {
   AGENTS,
   AGENT_TYPES,
-  MESSAGES,
   type AgentType,
+  type Message,
   type Ticket,
 } from "@/lib/orchestrator";
 
 import { AgentTile, StatusPill, agentStyles } from "./tokens";
 
-/** Log lines are revealed as the run advances, so a lane visibly fills up. */
-function visibleLog(ticket: Ticket) {
-  const log = MESSAGES.filter((m) => m.ticketId === ticket.id);
-  if (ticket.status === "done" || ticket.status === "review") return log;
-  if (ticket.status !== "running") return [];
-  const shown = Math.max(1, Math.ceil((log.length * (ticket.progress ?? 0)) / 100));
-  return log.slice(0, shown);
-}
-
 function RunCard({
   ticket,
+  log,
   onOpen,
 }: {
   ticket: Ticket;
+  log: Message[];
   onOpen: (ticket: Ticket) => void;
 }) {
   const isRunning = ticket.status === "running";
-  const log = visibleLog(ticket);
 
   return (
     <button
@@ -61,14 +53,16 @@ function RunCard({
         <StatusPill status={ticket.status} />
       </div>
 
+      {/* A coding agent doesn't report percent-complete, so the honest live
+          signal is the step count plus an indeterminate bar — not a fake
+          progress number counting up on a timer. */}
       {isRunning && (
         <div className="mt-2">
-          <Progress
-            value={ticket.progress ?? 0}
-            className="h-1 bg-amber-100 *:data-[slot=progress-indicator]:bg-amber-500"
-          />
+          <div className="h-1 overflow-hidden rounded-full bg-amber-100">
+            <div className="h-full animate-pulse rounded-full bg-amber-500" />
+          </div>
           <span className="mt-1 block font-mono text-[10px] text-amber-700">
-            {ticket.progress ?? 0}%
+            {ticket.steps} {ticket.steps === 1 ? "step" : "steps"}
           </span>
         </div>
       )}
@@ -102,10 +96,12 @@ function RunCard({
 function Lane({
   type,
   tickets,
+  messages,
   onOpen,
 }: {
   type: AgentType;
   tickets: Ticket[];
+  messages: Map<string, Message[]>;
   onOpen: (ticket: Ticket) => void;
 }) {
   const agent = AGENTS[type];
@@ -114,8 +110,8 @@ function Lane({
 
   return (
     <div className="flex min-w-0 flex-col rounded-xl border bg-muted/20">
-      {/* The rail is the agent's hue — four colors across the top says
-          "four specialists working at once" before you read a word. */}
+      {/* The rail is the agent's hue — a row of colors across the top says
+          "specialists working at once" before you read a word. */}
       <div className={cn("h-1 rounded-t-xl", styles.rail)} />
 
       <div className={cn("flex items-center gap-2 px-2.5 py-2", styles.lane)}>
@@ -136,26 +132,25 @@ function Lane({
       </div>
 
       <div className="flex flex-wrap gap-1 border-b px-2.5 pb-2">
-        {agent.tools.map((tool) => (
+        {agent.focus.map((item) => (
           <span
-            key={tool}
+            key={item}
             className="rounded bg-background px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground"
           >
-            {tool}
+            {item}
           </span>
         ))}
       </div>
 
       <div className="flex flex-1 flex-col gap-2 p-2">
-        {tickets.length === 0 ? (
-          <p className="px-1 py-6 text-center text-[11px] text-muted-foreground/70">
-            No tickets routed here.
-          </p>
-        ) : (
-          tickets.map((ticket) => (
-            <RunCard key={ticket.id} ticket={ticket} onOpen={onOpen} />
-          ))
-        )}
+        {tickets.map((ticket) => (
+          <RunCard
+            key={ticket.id}
+            ticket={ticket}
+            log={messages.get(ticket.id) ?? []}
+            onOpen={onOpen}
+          />
+        ))}
       </div>
     </div>
   );
@@ -163,13 +158,43 @@ function Lane({
 
 export function RunsBoard({
   tickets,
+  messages,
   onOpen,
 }: {
   tickets: Ticket[];
+  messages: Message[];
   onOpen: (ticket: Ticket) => void;
 }) {
   const runningCount = tickets.filter((t) => t.status === "running").length;
   const shipped = tickets.filter((t) => t.prUrl).length;
+
+  const byTicket = useMemo(() => {
+    const map = new Map<string, Message[]>();
+    for (const m of messages) {
+      const list = map.get(m.ticketId);
+      if (list) list.push(m);
+      else map.set(m.ticketId, [m]);
+    }
+    return map;
+  }, [messages]);
+
+  // Only the roles this epic actually routed to. Rendering all twelve would
+  // bury four live lanes in eight empty ones.
+  const lanes = useMemo(
+    () => AGENT_TYPES.filter((type) => tickets.some((t) => t.agentType === type)),
+    [tickets],
+  );
+
+  if (lanes.length === 0) {
+    return (
+      <div className="px-6 py-16 text-center">
+        <p className="text-sm font-medium">Nothing routed yet</p>
+        <p className="mt-1 text-xs text-muted-foreground">
+          Approve a ticket set and its agents show up here as they start.
+        </p>
+      </div>
+    );
+  }
 
   return (
     <div className="p-3">
@@ -192,11 +217,12 @@ export function RunsBoard({
       </div>
 
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
-        {AGENT_TYPES.map((type) => (
+        {lanes.map((type) => (
           <Lane
             key={type}
             type={type}
             tickets={tickets.filter((t) => t.agentType === type)}
+            messages={byTicket}
             onOpen={onOpen}
           />
         ))}
