@@ -121,7 +121,9 @@ async def execute_ticket(
             "Teammates' work on other tickets exists as unmerged PR branches, so "
             "this checkout may look sparse. That is expected: implement this "
             "ticket from its description, and always leave concrete file changes "
-            "behind rather than concluding there is nothing to do."
+            "behind rather than concluding there is nothing to do.\n"
+            "Do not run git commit or git push — the harness commits your work "
+            "and opens the PR after you finish."
         )
 
         # An agent that stops early — max turns, a model error — has usually

@@ -21,6 +21,8 @@ def _fake_run_factory(pr_url: str = "https://github.com/me/throwaway/pull/9"):
         stdout = ""
         if cmd[:2] == ["git", "status"]:
             stdout = "M app.py\n"  # pretend there are changes
+        elif cmd[:2] == ["git", "rev-list"]:
+            stdout = "1\n"  # one commit ahead of origin/HEAD
         elif cmd[:3] == ["git", "remote", "get-url"]:
             stdout = "https://github.com/me/throwaway.git\n"
         elif cmd[:2] == ["gh", "pr"]:
@@ -95,11 +97,14 @@ def test_push_authenticates_via_url_not_origin():
 
 
 def test_commit_push_pr_raises_no_changes_error_when_no_changes():
+    """No uncommitted changes AND no commits ahead of the default branch."""
     fake_run, _ = _fake_run_factory()
 
     def _no_changes_run(cmd, cwd=None, capture_output=True, text=True, env=None):
         if cmd[:2] == ["git", "status"]:
             return type("Result", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+        if cmd[:2] == ["git", "rev-list"]:
+            return type("Result", (), {"returncode": 0, "stdout": "0\n", "stderr": ""})()
         return fake_run(cmd, cwd=cwd)
 
     with patch("subprocess.run", side_effect=_no_changes_run):
@@ -109,6 +114,28 @@ def test_commit_push_pr_raises_no_changes_error_when_no_changes():
     # NoChangesError is a distinct outcome from a genuine push/PR failure, but
     # remains a RepoError so existing catch-alls still work.
     assert issubclass(repo.NoChangesError, repo.RepoError)
+
+
+def test_work_the_agent_committed_itself_still_becomes_a_pr():
+    """Regression: an agent ran `git commit` on its own work mid-run. The old
+    check only looked at `git status --porcelain`, saw a clean tree, threw
+    NoChangesError, and a finished quotes module died one push short of a PR."""
+    fake_run, calls = _fake_run_factory()
+
+    def _self_committed_run(cmd, cwd=None, capture_output=True, text=True, env=None):
+        if cmd[:2] == ["git", "status"]:
+            # Clean tree — the agent already committed.
+            return type("Result", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+        return fake_run(cmd, cwd=cwd)
+
+    with patch("subprocess.run", side_effect=_self_committed_run):
+        url = repo.commit_push_pr("/tmp/fake-workdir", "agent/swe-abc123", "title")
+
+    assert url == "https://github.com/me/throwaway/pull/9"
+    # Nothing to stage, so no synthetic commit — but push and PR still happen.
+    assert not any(c[:2] == ["git", "commit"] for c in calls)
+    assert any(c[:2] == ["git", "push"] for c in calls)
+    assert any(c[:2] == ["gh", "pr"] for c in calls)
 
 
 def test_failure_message_redacts_the_token():

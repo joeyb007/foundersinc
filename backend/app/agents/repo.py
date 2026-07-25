@@ -147,14 +147,23 @@ def commit_push_pr(workdir: str, branch: str, title: str) -> str | None:
     Returns the PR URL, or raises RepoError so the caller can fall back to a
     `git diff` string instead.
     """
+    # Commit anything uncommitted — but a clean tree is NOT the same as no
+    # work. Agents sometimes `git commit` their own changes mid-run, which
+    # left the tree clean, tripped the old no-changes check, and threw away
+    # finished work that was one push from a PR. Ahead-of-default is the
+    # real signal.
     diff_check = subprocess.run(
         ["git", "status", "--porcelain"], cwd=workdir, capture_output=True, text=True
     )
-    if not diff_check.stdout.strip():
-        raise NoChangesError("no changes to commit")
+    if diff_check.stdout.strip():
+        _run(["git", "add", "-A"], cwd=workdir)
+        _run(["git", "commit", "-m", title], cwd=workdir)
 
-    _run(["git", "add", "-A"], cwd=workdir)
-    _run(["git", "commit", "-m", title], cwd=workdir)
+    ahead = _run(
+        ["git", "rev-list", "--count", "origin/HEAD..HEAD"], cwd=workdir
+    ).stdout.strip()
+    if ahead == "0":
+        raise NoChangesError("no changes to commit")
 
     # Push to the authenticated URL explicitly rather than to `origin`, so the
     # credential never has to live in .git/config.
