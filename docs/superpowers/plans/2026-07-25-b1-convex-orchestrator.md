@@ -999,3 +999,40 @@ Only if Tasks 0–7 are solid. A reviewer agent checks a completed run and can b
 - **Demo-value ordering is load-bearing.** Do Task 2 (parallel board on seeded data) before Tasks 3–7. If you run low on time, a working Task 2 + Task 5 (real agents) + Task 7 (seam) is a complete, impressive demo; Task 6's live decompose and Task 8 are gravy.
 - **The FastAPI↔Convex boundary is the whole risk surface.** It's isolated to `runOne` and `proposeDecomposition`. Both have a working fallback (stub / seeded tickets) so the demo never hard-blocks on the tunnel or GitHub auth.
 - **Leave-it-integratable (north star):** the teammate needs only the epic id and these six public functions — `submitEpic`, `proposeDecomposition`, `approveTickets`, `runApproved`, and the queries `tickets.listByEpic` / `runs.listByEpic` / `messages.listByTicket`. Everything else is `internal` and invisible to them. Keep it that way.
+
+---
+
+## ADDENDUM (2026-07-25): Real coding agents via the Claude Agent SDK
+
+**Decision (supersedes the agent-execution parts of Tasks 3–5):** agents are now real coding agents that edit an existing repo, not single-call file generators. User-confirmed mental model: **each agent works on its own isolated checkout + feature branch and opens a PR for human review** (never auto-merged). Roles expanded to a fixed 12 (see `validators.ts` / `configs.py`). Convex orchestration + schema + the b2 seam are UNCHANGED; only the executor and how `runOne` drives it change.
+
+### Verified Claude Agent SDK (Python) API — use exactly this shape
+`pip install claude-agent-sdk`. `from claude_agent_sdk import query, ClaudeAgentOptions, AgentDefinition, AssistantMessage, TextBlock, ResultMessage`. Drive with `async for message in query(prompt, options)`. `ClaudeAgentOptions(cwd, model, system_prompt, permission_mode, allowed_tools, max_turns, setting_sources, agents={name: AgentDefinition(...)})`. Built-in tools: `Read/Write/Edit/Bash/Grep/Glob`. `permission_mode="bypassPermissions"` for headless edits. `ResultMessage` has `.subtype` ("success"/"error") and `.result`. Recursion = the `agents=` sub-agent roster (one level). If any binding is uncertain, WebFetch `https://code.claude.com/docs/en/agent-sdk/python` before writing — it is a separate product from the Messages API.
+
+### Roles become personas
+`AGENT_CONFIGS` in `backend/app/agents/configs.py` changes meaning: each of the 12 roles maps to a **persona system prompt** (e.g. `ui` → "You are a frontend engineer; make the smallest coherent change that implements the ticket in this repo"), NOT a `{filename}`. Drop the `filename` key. Add a shared `SUBAGENTS` roster (e.g. `reviewer`, `tester` as `AgentDefinition`s) passed to every run for recursion.
+
+### FastAPI executor (replaces `run_agent` + `open_pr`)
+- `POST /agents/run` body `{ticketId, runId, agentType, title, body}` → returns **202 immediately** and schedules a background task (FastAPI `BackgroundTasks`). Do NOT block the request for the whole agent run (a coding agent runs minutes; the Convex action that called it must return fast).
+- Background `execute_ticket(...)`:
+  1. `git clone` (or `worktree add`) the target repo into a fresh temp dir; create branch `agent/{agentType}-{short-uuid}` off the base branch. **One isolated checkout per run.**
+  2. `run_coding_agent(cwd, persona, ticket_text, subagents)` — async, drives `query(...)` with the verified options; collect each `AssistantMessage` text + tool step as a log line, and push each line to Convex live via the callback (below).
+  3. `git add -A && git commit -m ...`; `git push origin <branch>`; open the PR with `gh pr create` (gh is already logged in) → capture the PR URL. On push/PR failure, capture a `git diff` string as the fallback.
+  4. Finalize via the Convex callback with `prUrl` (or `diff`).
+- New/changed files: `app/agents/base.py` (`run_coding_agent`), `app/agents/configs.py` (personas + SUBAGENTS), `app/agents/repo.py` (clone/branch/commit/push + `gh pr create`), `app/convex_client.py` (callback wrapper), `app/api/agents.py` (202 + BackgroundTasks). `app/github.py` `open_pr` and `test_agents.py`'s single-call test are removed/replaced.
+
+### Convex integration change — decouple agent duration from action limits
+FastAPI streams progress + the final PR back into Convex via the **Convex Python client** (`pip install convex`; `ConvexClient(CONVEX_URL).mutation("messages:appendPublic", {...})`). This keeps the live board reactive while the agent runs for minutes.
+- `runOne` (rework): create the run row, set ticket `running`, append a "dispatched" message, POST `{ticketId, runId, agentType, title, body}` to `AGENT_SERVICE_URL/agents/run`, and **return** (do not await the agent). The board is driven by the callback-written rows, not the workflow step's lifetime.
+- Two new PUBLIC, secret-guarded callback mutations (Python client can only call public fns):
+  - `messages.appendPublic({secret, ticketId, role, content})` — verifies `secret === process.env.CALLBACK_SECRET`, then inserts.
+  - `runs.finishPublic({secret, runId, prUrl?, diff?})` — verifies secret; patches the run to `done` with `prUrl`/`diff`, then patches its ticket to `done`.
+- Convex env (dashboard): `AGENT_SERVICE_URL`, `CALLBACK_SECRET`. FastAPI env: `CONVEX_URL`, `CALLBACK_SECRET`, `ANTHROPIC_API_KEY`, `TARGET_REPO` (a THROWAWAY repo the agents edit), plus `gh` auth for PRs.
+
+### Security + prereqs
+- `bypassPermissions` gives the agent unrestricted edit/bash — **only ever point `TARGET_REPO` at a throwaway repo**; the per-run isolated clone contains the blast radius. Cap `max_turns`.
+- The Python SDK drives the Claude Code harness, so the FastAPI host needs the **Claude Code CLI** available (present on this machine; note for deploy).
+- `decomposeEpic` (Task 6) stays a plain Anthropic Messages call (NOT the Agent SDK) — it's JSON classification; its prompt + `valid` set must list all 12 roles.
+
+### Verification note
+No `ANTHROPIC_API_KEY`, target repo, or Convex deployment in this environment → the implementer writes the executor + Convex code and unit-tests with the Agent SDK `query`, git, and `gh` **mocked**; live end-to-end (real agent editing a real throwaway repo, real PRs, the reactive board) is deferred to the user.

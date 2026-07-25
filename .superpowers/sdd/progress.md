@@ -11,4 +11,8 @@ Grouping:
 - Task 8 (reviewer) = stretch, only if time
 
 ## Status
-- (in progress) Group A
+- Group A: complete (commit ed70af3..15504da, review clean). Minor debt: runs.listByEpic full-table scan (spec-mandated, fine at demo scale).
+- (in progress) Group B — subagents no longer commit; changes left in working tree for user.
+
+## Minor findings (for final review triage)
+- runs.listByEpic does an unindexed runs.collect() then filters in memory (plan-mandated; ~4-20 rows at demo scale).
