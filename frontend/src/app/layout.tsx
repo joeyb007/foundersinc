@@ -16,8 +16,9 @@ const geistMono = Geist_Mono({
   subsets: ["latin"],
 });
 
+// Both routes set their own title; this is the fallback.
 export const metadata: Metadata = {
-  title: "Founders Inc — Epic board",
+  title: "Founders Inc",
   description:
     "Submit an epic, approve the ticket set, and watch specialized agents ship it in parallel.",
 };
