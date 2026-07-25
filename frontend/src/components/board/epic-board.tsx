@@ -20,6 +20,7 @@ import {
   UserCheck,
   Zap,
 } from "lucide-react";
+import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 
@@ -42,6 +43,7 @@ import { Separator } from "@/components/ui/separator";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
+import { takeDraft } from "@/lib/intake";
 import {
   AGENTS,
   AGENT_TYPES,
@@ -56,7 +58,6 @@ import {
 
 import { ApprovalQueue, type Approver } from "./approval-queue";
 import { ByStatusView } from "./by-status-view";
-import { NewEpicDialog } from "./new-epic-dialog";
 import { RunsBoard } from "./runs-board";
 import { TicketPanel } from "./ticket-panel";
 import { TicketTable } from "./ticket-table";
@@ -70,41 +71,6 @@ const SORT_LABELS: Record<SortKey, string> = {
   effort: "Effort",
   agent: "Agent",
 };
-
-/** Tickets the planner would propose for a freshly submitted epic. */
-function proposeTickets(text: string, seq: number): Ticket[] {
-  const stub = text.length > 60 ? `${text.slice(0, 60).trimEnd()}…` : text;
-  const plan: Array<{ title: string; body: string; agentType: AgentType }> = [
-    {
-      title: "Build the surface for this epic",
-      body: `Frontend work for: ${stub}`,
-      agentType: "ui",
-    },
-    {
-      title: "Stand up the API and wire persistence",
-      body: `Service layer for: ${stub}`,
-      agentType: "swe",
-    },
-    {
-      title: "Model the data this epic needs",
-      body: `Schema and queries for: ${stub}`,
-      agentType: "ds",
-    },
-  ];
-
-  return plan.map((item, index) => ({
-    id: `new_${seq}_${index}`,
-    key: `FI-${200 + seq * 10 + index}`,
-    epicId: EPIC.id,
-    title: item.title,
-    body: item.body,
-    agentType: item.agentType,
-    status: "proposed",
-    priority: index === 0 ? "high" : "medium",
-    effort: index === 1 ? "large" : "medium",
-    updatedAt: new Date().toISOString(),
-  }));
-}
 
 function ToolbarButton({
   label,
@@ -124,6 +90,7 @@ function ToolbarButton({
 }
 
 export function EpicBoard() {
+  const router = useRouter();
   const [tickets, setTickets] = useState<Ticket[]>(TICKETS);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [approvers, setApprovers] = useState<Approver[]>(APPROVERS);
@@ -131,11 +98,29 @@ export function EpicBoard() {
   const [agentFilter, setAgentFilter] = useState<Set<AgentType>>(new Set());
   const [sortKey, setSortKey] = useState<SortKey>("updated");
   const [compact, setCompact] = useState(false);
+  const [epicTitle, setEpicTitle] = useState(EPIC.title);
   // Track the id, not the object, so the panel follows its run as it advances.
   const [panelId, setPanelId] = useState<string | null>(null);
-  const [epicOpen, setEpicOpen] = useState(false);
   const prCounter = useRef(43);
-  const epicSeq = useRef(0);
+
+  // A breakdown drafted on the intake screen at / is handed over through
+  // sessionStorage. Draining it here — once, on mount — drops the new tickets
+  // in at the top of All tickets with the set already selected, so the
+  // approve-and-run bar is one click away without leaving the default view.
+  //
+  // This has to be an effect rather than lazy state: sessionStorage doesn't
+  // exist during the server render, so reading it in an initializer would
+  // hydrate a different tree than the server sent. Reading a one-shot handoff
+  // out of browser storage is the external-system case the rule carves out for.
+  /* eslint-disable react-hooks/set-state-in-effect */
+  useEffect(() => {
+    const draft = takeDraft();
+    if (!draft) return;
+    setEpicTitle(draft.title);
+    setTickets((current) => [...draft.tickets, ...current]);
+    setSelected(new Set(draft.tickets.map((ticket) => ticket.id)));
+  }, []);
+  /* eslint-enable react-hooks/set-state-in-effect */
 
   // Runs advance on their own — this is what makes the parallelism visible.
   useEffect(() => {
@@ -271,21 +256,12 @@ export function EpicBoard() {
     toast.success(`Started ${ids.length} approved ${ids.length === 1 ? "ticket" : "tickets"}`);
   }
 
-  function submitEpic(text: string) {
-    epicSeq.current += 1;
-    const proposed = proposeTickets(text, epicSeq.current);
-    setTickets((current) => [...proposed, ...current]);
-    toast.success(`Decomposed into ${proposed.length} tickets`, {
-      description: "Review them in the approval queue.",
-    });
-  }
-
   return (
     <div className="flex min-h-full flex-col bg-background">
       {/* Page chrome */}
       <header className="sticky top-0 z-20 flex h-11 items-center gap-2 border-b bg-background/95 px-3 backdrop-blur">
         <CircleCheckBig className="size-4 shrink-0 text-emerald-600" />
-        <span className="truncate text-sm font-medium">{EPIC.title}</span>
+        <span className="truncate text-sm font-medium">{epicTitle}</span>
         <Separator orientation="vertical" className="h-4" />
         <span className="flex shrink-0 items-center gap-1 text-xs text-muted-foreground">
           <Lock className="size-3" />
@@ -316,21 +292,18 @@ export function EpicBoard() {
       <main className="mx-auto w-full max-w-[1600px] flex-1 px-4 pb-16 sm:px-8">
         {/* Title block */}
         <div className="pt-10 pb-6">
-          <div className="flex items-start gap-3">
-            <CircleCheckBig className="mt-1 size-8 shrink-0 text-emerald-600" />
-            <div className="min-w-0">
-              <h1 className="text-3xl font-semibold tracking-tight">
-                {EPIC.title}
-              </h1>
-              <p className="mt-1.5 max-w-2xl text-sm text-muted-foreground">
-                One epic, four specialists, shipped in parallel. You hold the
-                approval gate.
-              </p>
-            </div>
+          <div className="min-w-0">
+            <h1 className="text-3xl font-semibold tracking-tight">
+              {epicTitle}
+            </h1>
+            <p className="mt-1.5 max-w-2xl text-sm text-muted-foreground">
+              One epic, four specialists, shipped in parallel. You hold the
+              approval gate.
+            </p>
           </div>
 
           {/* Epic meta — what this board is actually pointed at. */}
-          <div className="mt-4 flex flex-wrap items-center gap-x-5 gap-y-2 pl-11 text-xs">
+          <div className="mt-4 flex flex-wrap items-center gap-x-5 gap-y-2 text-xs">
             <span className="flex items-center gap-1.5 text-muted-foreground">
               <GitBranch className="size-3.5" />
               <span className="font-mono">{EPIC.repo}</span>
@@ -492,7 +465,7 @@ export function EpicBoard() {
                     Run every approved ticket
                   </DropdownMenuItem>
                   <DropdownMenuSeparator />
-                  <DropdownMenuItem onSelect={() => setEpicOpen(true)}>
+                  <DropdownMenuItem onSelect={() => router.push("/")}>
                     <Sparkles />
                     Decompose a new epic
                   </DropdownMenuItem>
@@ -549,7 +522,7 @@ export function EpicBoard() {
                 <Button
                   size="sm"
                   className="rounded-r-none"
-                  onClick={() => setEpicOpen(true)}
+                  onClick={() => router.push("/")}
                 >
                   <Plus data-icon="inline-start" />
                   New
@@ -565,11 +538,11 @@ export function EpicBoard() {
                     </Button>
                   </DropdownMenuTrigger>
                   <DropdownMenuContent align="end">
-                    <DropdownMenuItem onSelect={() => setEpicOpen(true)}>
+                    <DropdownMenuItem onSelect={() => router.push("/")}>
                       <Sparkles />
                       New epic
                     </DropdownMenuItem>
-                    <DropdownMenuItem onSelect={() => setEpicOpen(true)}>
+                    <DropdownMenuItem onSelect={() => router.push("/")}>
                       <Plus />
                       New ticket
                     </DropdownMenuItem>
@@ -622,7 +595,7 @@ export function EpicBoard() {
               onToggle={toggleTicket}
               onToggleAll={toggleAll}
               onOpen={(ticket) => setPanelId(ticket.id)}
-              onNewTicket={() => setEpicOpen(true)}
+              onNewTicket={() => router.push("/")}
             />
           </TabsContent>
 
@@ -657,11 +630,6 @@ export function EpicBoard() {
       <TicketPanel
         ticket={panelTicket}
         onOpenChange={(open) => !open && setPanelId(null)}
-      />
-      <NewEpicDialog
-        open={epicOpen}
-        onOpenChange={setEpicOpen}
-        onSubmit={submitEpic}
       />
     </div>
   );
