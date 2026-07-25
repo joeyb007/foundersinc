@@ -10,13 +10,13 @@
 
 import type * as agents from "../agents.js";
 import type * as epics from "../epics.js";
+import type * as graph from "../graph.js";
 import type * as messages from "../messages.js";
 import type * as orchestrator from "../orchestrator.js";
 import type * as runs from "../runs.js";
 import type * as seed from "../seed.js";
 import type * as tickets from "../tickets.js";
 import type * as validators from "../validators.js";
-import type * as workflows from "../workflows.js";
 
 import type {
   ApiFromModules,
@@ -27,13 +27,13 @@ import type {
 declare const fullApi: ApiFromModules<{
   agents: typeof agents;
   epics: typeof epics;
+  graph: typeof graph;
   messages: typeof messages;
   orchestrator: typeof orchestrator;
   runs: typeof runs;
   seed: typeof seed;
   tickets: typeof tickets;
   validators: typeof validators;
-  workflows: typeof workflows;
 }>;
 
 /**

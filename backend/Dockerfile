@@ -34,6 +34,10 @@ RUN useradd --create-home --shell /bin/bash agent
 COPY entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 
+# /app must be owned by `agent` before the USER switch: WORKDIR creates it as
+# root, and `uv sync` then can't write .venv into it — the build fails at that
+# layer, not at runtime.
+RUN mkdir -p /app && chown -R agent:agent /app
 WORKDIR /app
 COPY --chown=agent:agent pyproject.toml uv.lock ./
 

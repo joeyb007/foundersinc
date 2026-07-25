@@ -139,8 +139,13 @@ def test_execute_ticket_outer_error_preserves_diff_and_removes_workdir():
 
 
 def test_execute_ticket_outer_error_falls_back_to_error_string_if_diff_fails():
-    async def _boom(*_a, **_k):
-        raise RuntimeError("agent crashed")
+    """The outer handler is now reached only by failures outside the agent
+    itself — an agent that dies mid-run is caught so its work can still be
+    committed (see test_partial_work.py). Here the PR path fails *and* the diff
+    capture fails, which must still finalize the run rather than hang it."""
+
+    def _push_boom(*_a, **_k):
+        raise RepoError("push rejected")
 
     def _diff_boom(_workdir):
         raise RuntimeError("git diff failed too")
@@ -149,7 +154,8 @@ def test_execute_ticket_outer_error_falls_back_to_error_string_if_diff_fails():
 
     with (
         patch.object(agents, "clone_and_branch", lambda *_a, **_k: ("/tmp/fake-workdir", "agent/swe-x")),
-        patch.object(agents, "run_coding_agent", _boom),
+        patch.object(agents, "run_coding_agent", _async_noop),
+        patch.object(agents, "commit_push_pr", _push_boom),
         patch.object(agents, "diff_fallback", _diff_boom),
         patch.object(agents.convex_client, "append_message", lambda *a, **k: None),
         patch.object(agents.convex_client, "finish_run", lambda run_id, **kw: finish_calls.append((run_id, kw))),
@@ -159,4 +165,4 @@ def test_execute_ticket_outer_error_falls_back_to_error_string_if_diff_fails():
 
     assert len(finish_calls) == 1
     _run_id, kwargs = finish_calls[0]
-    assert "agent error: agent crashed" in kwargs.get("diff", "")
+    assert "agent error: git diff failed too" in (kwargs.get("diff") or "")

@@ -47,6 +47,7 @@ import { api } from "../../../convex/_generated/api";
 import type { Id } from "../../../convex/_generated/dataModel";
 
 import { ApprovalQueue, type Approver } from "./approval-queue";
+import { PipelineGraph } from "./pipeline-graph";
 import { ByStatusView } from "./by-status-view";
 import { RunsBoard } from "./runs-board";
 import { TicketPanel } from "./ticket-panel";
@@ -271,6 +272,13 @@ export function EpicBoard({ epicId: rawEpicId }: { epicId?: string }) {
                 {runningCount} running
               </span>
             )}
+          </div>
+
+          {/* The execution plan. Agents run left to right, everything in a
+              column at once — without this the ordering is invisible and idle
+              agents look broken rather than queued. */}
+          <div className="mt-4">
+            <PipelineGraph tickets={tickets} />
           </div>
         </div>
 

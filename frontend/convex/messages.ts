@@ -1,10 +1,20 @@
 import { query, mutation, internalMutation } from "./_generated/server";
 import { v } from "convex/values";
 
+// Both queries keep the NEWEST slice. Taking in ascending order froze a chatty
+// run's feed at its first N lines — the latest activity, the workdir census,
+// and the "opened PR" line all fell off the end, exactly the messages the
+// board exists to show.
 export const listByTicket = query({
   args: { ticketId: v.id("tickets") },
-  handler: (ctx, { ticketId }) =>
-    ctx.db.query("messages").withIndex("by_ticket", (q) => q.eq("ticketId", ticketId)).take(500),
+  handler: async (ctx, { ticketId }) => {
+    const newest = await ctx.db
+      .query("messages")
+      .withIndex("by_ticket", (q) => q.eq("ticketId", ticketId))
+      .order("desc")
+      .take(500);
+    return newest.reverse();
+  },
 });
 
 // The live board shows every lane at once, so it takes the whole epic's feed in
@@ -22,6 +32,7 @@ export const listByEpic = query({
         ctx.db
           .query("messages")
           .withIndex("by_ticket", (q) => q.eq("ticketId", t._id))
+          .order("desc")
           .take(200),
       ),
     );

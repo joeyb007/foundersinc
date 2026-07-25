@@ -3,7 +3,6 @@ import { api, internal } from "./_generated/api";
 import { v } from "convex/values";
 import { agentType } from "./validators";
 import { ensureRepoFor } from "./agents";
-import { workflow } from "./workflows";
 import type { Id } from "./_generated/dataModel";
 
 // ---------------------------------------------------------------------------
@@ -59,17 +58,21 @@ export const approveTickets = mutation({
  *
  *  Returns null instead of throwing when the agent service or the GitHub
  *  credential is unhappy — an epic with no repo yet is a legitimate state the
- *  board already renders, and the workflow will try again at run time. */
+ *  board already renders, and the first wave retries the creation anyway. */
 export const ensureEpicRepo = action({
   args: { epicId: v.id("epics") },
   handler: (ctx, { epicId }): Promise<string | null> => ensureRepoFor(ctx, epicId),
 });
 
+// Both run entry points kick the pipeline the same way: schedule the first
+// wave and return. There is no long-lived orchestrator — dispatch is
+// fire-and-forget, so each wave's completion callbacks (runs.finishPublic)
+// are what schedule the wave after it. See agents.dispatchNextWave.
 export const runApproved = mutation({
   args: { epicId: v.id("epics") },
   handler: async (ctx, { epicId }) => {
     await ctx.db.patch("epics", epicId, { status: "executing" });
-    await workflow.start(ctx, internal.workflows.executeApproved, { epicId });
+    await ctx.scheduler.runAfter(0, internal.agents.dispatchNextWave, { epicId });
   },
 });
 
@@ -94,7 +97,7 @@ export const approveAndRun = mutation({
     }
 
     await ctx.db.patch("epics", epicId, { status: "executing" });
-    await workflow.start(ctx, internal.workflows.executeApproved, { epicId });
+    await ctx.scheduler.runAfter(0, internal.agents.dispatchNextWave, { epicId });
     return approved;
   },
 });

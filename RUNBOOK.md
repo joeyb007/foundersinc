@@ -157,15 +157,23 @@ Then open the epic's repo — the PRs are on its Pull requests tab.
   runs finishing suspiciously fast with an `agent run failed` diff. The
   Dockerfile creates and switches to `agent`; don't undo it. This cannot be
   reproduced locally, where you aren't root.
-- **In-flight runs do not survive a restart.** FastAPI `BackgroundTasks` are
-  in-process: a redeploy, crash, or scale-down mid-run leaves that ticket
-  `running` forever, because nothing calls `finish_run`. There is no watchdog.
-  Re-run the epic. For anything beyond a demo this wants a real queue, or a
-  reaper that finalizes runs older than N minutes.
+- **Agents run in waves, driven by completions.** The org chart in
+  `frontend/convex/graph.ts` groups tickets into tiers (plan → foundations →
+  surfaces → models → verify → document). `runs.finishPublic` is the wave
+  clock: the completion that drains a wave schedules
+  `agents.dispatchNextWave` for the next tier. There is no long-lived
+  workflow — dispatch is fire-and-forget, so completions are the only
+  reliable signal a wave is done.
+- **In-flight runs do not survive a restart — and now they stall the
+  pipeline.** FastAPI `BackgroundTasks` are in-process: a redeploy, crash, or
+  scale-down mid-run leaves that ticket `running` forever, because nothing
+  calls `finish_run` — and since completions advance the waves, every later
+  tier waits behind it. No watchdog exists. Recover by re-running the epic.
+  For anything beyond a demo this wants a real queue, or a reaper that
+  finalizes runs older than N minutes.
 - **Size the box for concurrency.** Each ticket spawns a full Claude Code agent
-  with its own git checkout. The workflow fans out up to `maxParallelism`
-  (`frontend/convex/workflows.ts`) — on a small instance drop it to 3–4 and give
-  it ≥1–2 GB RAM, or the agents thrash.
+  with its own git checkout. A wave dispatches all of its tickets at once — on
+  a small instance give it ≥1–2 GB RAM, or the agents thrash.
 - **Free tiers idle out.** A cold Railway box adds startup latency to the first
   dispatch; Convex actions have their own timeout, so a very cold start can make
   the first run fail while later ones succeed.

@@ -10,7 +10,9 @@ from claude_agent_sdk import (
     ClaudeAgentOptions,
     ResultMessage,
     TextBlock,
+    ToolResultBlock,
     ToolUseBlock,
+    UserMessage,
     query,
 )
 
@@ -27,7 +29,12 @@ MODEL = os.environ.get("AGENT_MODEL", "claude-haiku-4-5")
 # Real coding-agent runs can take minutes; cap turns so a single ticket can't
 # run away with the process (also bounds cost/blast-radius alongside the
 # per-run isolated git checkout + bypassPermissions).
-MAX_TURNS = 30
+#
+# 30 was too tight for Haiku, which takes more turns than Opus to reach the
+# same place and was hitting the ceiling mid-build on every ticket. Running
+# out is no longer fatal — the caller commits whatever exists — but a run that
+# ends mid-edit still makes for a worse PR.
+MAX_TURNS = int(os.environ.get("AGENT_MAX_TURNS", "100"))
 
 OnLog = Callable[[str], None]
 
@@ -59,11 +66,28 @@ async def run_coding_agent(cwd: str, persona: str, ticket_text: str, on_log: OnL
                     on_log(block.text.strip())
                 elif isinstance(block, ToolUseBlock):
                     on_log(f"tool: {block.name}({_summarize_input(block.input, cwd)})")
+        elif isinstance(message, UserMessage):
+            # Tool RESULTS come back on the user turn. Logging only the
+            # requests hid an entire failure class: an agent whose every Write
+            # errored looked identical, in the feed, to one that succeeded —
+            # right up until "agent made no changes".
+            for block in message.content if isinstance(message.content, list) else []:
+                if isinstance(block, ToolResultBlock) and block.is_error:
+                    on_log(f"tool error: {_summarize_result(block.content)}")
         elif isinstance(message, ResultMessage):
             result = message
             on_log(f"result ({message.subtype}): {message.result}")
 
     return result
+
+
+def _summarize_result(content: object) -> str:
+    if isinstance(content, str):
+        return content[:200]
+    if isinstance(content, list):
+        parts = [b.get("text", "") for b in content if isinstance(b, dict)]
+        return " ".join(p for p in parts if p)[:200]
+    return str(content)[:200]
 
 
 def _relativize(value: object, cwd: str) -> object:

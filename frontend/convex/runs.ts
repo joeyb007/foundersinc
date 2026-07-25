@@ -1,6 +1,38 @@
-import { query, mutation, internalMutation } from "./_generated/server";
+import { query, mutation, internalMutation, type MutationCtx } from "./_generated/server";
+import { internal } from "./_generated/api";
 import { v } from "convex/values";
 import { agentType } from "./validators";
+import type { Id } from "./_generated/dataModel";
+
+/** The wave clock. Dispatch is fire-and-forget, so run *completions* are the
+ *  only signal that a wave has drained — every path that finalizes a run ends
+ *  here, and the last one standing schedules the next tier.
+ *
+ *  Race-free without any stored wave state: mutations are serializable, so
+ *  when two agents finish together, exactly one of them is the transaction
+ *  that observes zero running tickets. */
+async function advanceIfWaveDrained(ctx: MutationCtx, epicId: Id<"epics">) {
+  const tickets = await ctx.db
+    .query("tickets")
+    .withIndex("by_epic", (q) => q.eq("epicId", epicId))
+    .take(100);
+
+  if (tickets.some((t) => t.status === "running")) return;
+  if (!tickets.some((t) => t.status === "approved")) {
+    // Nothing queued: the pipeline is finished (or awaiting approval).
+    if (tickets.length > 0 && tickets.every((t) => t.status === "done")) {
+      await ctx.db.patch("epics", epicId, { status: "shipped" });
+    }
+    return;
+  }
+
+  await ctx.scheduler.runAfter(0, internal.agents.dispatchNextWave, { epicId });
+}
+
+export const maybeAdvance = internalMutation({
+  args: { epicId: v.id("epics") },
+  handler: (ctx, { epicId }) => advanceIfWaveDrained(ctx, epicId),
+});
 
 export const listByEpic = query({
   args: { epicId: v.id("epics") },
@@ -53,6 +85,14 @@ export const finishPublic = mutation({
     const run = await ctx.db.get("runs", runId);
     if (run) {
       await ctx.db.patch("tickets", run.ticketId, { status: "done" });
+      const ticket = await ctx.db.get("tickets", run.ticketId);
+      if (ticket) {
+        // This completion may have drained the current wave — if so, the next
+        // tier of the org chart dispatches from here. The wave loop lives in
+        // this callback, not in a workflow: dispatch is fire-and-forget, so
+        // completions are the only reliable clock.
+        await advanceIfWaveDrained(ctx, ticket.epicId);
+      }
     }
   },
 });

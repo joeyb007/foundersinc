@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import shutil
+import subprocess
 
 from fastapi import APIRouter, BackgroundTasks, HTTPException
 from pydantic import BaseModel
@@ -106,8 +107,49 @@ async def execute_ticket(
         def on_log(line: str) -> None:
             _safe_append_message(ticket_id, "agent", line)
 
-        ticket_text = f"Ticket: {title}\n\n{body}\n\nMake the change in this repo."
-        await run_coding_agent(workdir, persona, ticket_text, on_log)
+        # Two observed failure modes shape this prompt. Smaller models write to
+        # "/package.json" — treating filesystem root as repo root — which now
+        # fails with EACCES (and as root silently landed outside the checkout).
+        # And later-wave agents see a near-empty repo, because earlier waves'
+        # work lives on unmerged PR branches, and conclude there's nothing to
+        # do. Both are told exactly what's going on instead.
+        ticket_text = (
+            f"Ticket: {title}\n\n{body}\n\n"
+            f"Work inside the repo checkout at {workdir} (your current working "
+            "directory). Create and edit files at paths under that directory — "
+            "never at filesystem root like /package.json.\n"
+            "Teammates' work on other tickets exists as unmerged PR branches, so "
+            "this checkout may look sparse. That is expected: implement this "
+            "ticket from its description, and always leave concrete file changes "
+            "behind rather than concluding there is nothing to do."
+        )
+
+        # An agent that stops early — max turns, a model error — has usually
+        # still written real files. Catching here rather than letting it unwind
+        # to the outer handler means that work goes through the commit step
+        # instead of being deleted with the checkout. "A PR appeared" is the
+        # deliverable (docs/ctd.md); a partial PR beats no PR.
+        try:
+            await run_coding_agent(workdir, persona, ticket_text, on_log)
+        except Exception as e:  # noqa: BLE001 - keep whatever it managed to write
+            _safe_append_message(
+                ticket_id, "system", f"agent stopped early ({redact(str(e))}); committing what exists"
+            )
+
+        # Ground truth between "agent finished" and "commit": how much actually
+        # landed in the checkout. Debugging "agent made no changes" without this
+        # meant guessing whether writes failed, went elsewhere, or never ran.
+        # Best-effort — diagnostics must never take down the run they describe.
+        try:
+            status = subprocess.run(
+                ["git", "status", "--porcelain"], cwd=workdir, capture_output=True, text=True
+            )
+            changed = len([line for line in status.stdout.splitlines() if line.strip()])
+            _safe_append_message(
+                ticket_id, "system", f"workdir has {changed} changed path(s) to commit"
+            )
+        except OSError:
+            logger.exception("workdir census failed for ticket_id=%s", ticket_id)
 
         try:
             pr_url = commit_push_pr(workdir, branch, f"[{agent_type}] {title}")

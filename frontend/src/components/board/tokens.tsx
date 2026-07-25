@@ -214,9 +214,13 @@ export function EffortBadge({ effort }: { effort: Effort }) {
   );
 }
 
-/** The payoff column: a real PR on a real repo. */
+/** The payoff column: a real PR on a real repo.
+ *
+ *  Keyed on the URL alone. Requiring a parsed `prNumber` too would render a
+ *  landed PR as an em-dash whenever the number didn't parse out of the URL —
+ *  hiding the one thing the whole run exists to produce. */
 export function PrLink({ prNumber, prUrl }: { prNumber?: number; prUrl?: string }) {
-  if (!prUrl || !prNumber) {
+  if (!prUrl) {
     return <span className="font-mono text-xs text-muted-foreground/50">—</span>;
   }
   return (
@@ -224,9 +228,11 @@ export function PrLink({ prNumber, prUrl }: { prNumber?: number; prUrl?: string 
       href={prUrl}
       target="_blank"
       rel="noreferrer"
-      className="inline-flex items-center gap-1.5 rounded-md px-1.5 py-0.5 font-mono text-xs font-medium text-emerald-700 transition-colors hover:bg-emerald-50 focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+      onClick={(event) => event.stopPropagation()}
+      className="inline-flex items-center gap-1.5 rounded-md px-1.5 py-0.5 font-mono text-xs font-medium text-emerald-700 transition-colors hover:bg-emerald-50 hover:underline focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
     >
-      <GitPullRequestArrow className="size-3.5" />#{prNumber}
+      <GitPullRequestArrow className="size-3.5" />
+      {prNumber ? `#${prNumber}` : "PR"}
     </a>
   );
 }
