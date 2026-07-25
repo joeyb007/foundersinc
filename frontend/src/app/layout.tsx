@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
+import { ConvexClientProvider } from "@/components/convex-client-provider";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { Toaster } from "@/components/ui/sonner";
 import "./globals.css";
@@ -18,7 +19,7 @@ const geistMono = Geist_Mono({
 
 // Both routes set their own title; this is the fallback.
 export const metadata: Metadata = {
-  title: "Founders Inc",
+  title: "Cycles",
   description:
     "Submit an epic, approve the ticket set, and watch specialized agents ship it in parallel.",
 };
@@ -34,8 +35,10 @@ export default function RootLayout({
       className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
     >
       <body className="flex min-h-full flex-col">
-        <TooltipProvider>{children}</TooltipProvider>
-        <Toaster />
+        <ConvexClientProvider>
+          <TooltipProvider>{children}</TooltipProvider>
+          <Toaster />
+        </ConvexClientProvider>
       </body>
     </html>
   );

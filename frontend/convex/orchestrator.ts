@@ -1,32 +1,107 @@
 import { mutation, action } from "./_generated/server";
-import { internal } from "./_generated/api";
+import { api, internal } from "./_generated/api";
 import { v } from "convex/values";
+import { agentType } from "./validators";
+import { ensureRepoFor } from "./agents";
 import { workflow } from "./workflows";
+import type { Id } from "./_generated/dataModel";
 
-export const runApproved = mutation({
-  args: { epicId: v.id("epics") },
-  handler: async (ctx, { epicId }) => {
-    await workflow.start(ctx, internal.workflows.executeApproved, { epicId });
-  },
-});
+// ---------------------------------------------------------------------------
+// The public seam. The UI only ever calls the functions in this file plus the
+// three list queries (tickets/runs/messages) — never FastAPI directly.
+// ---------------------------------------------------------------------------
 
 export const submitEpic = mutation({
   args: { title: v.string(), body: v.string() },
   handler: (ctx, { title, body }) => ctx.db.insert("epics", { title, body, status: "draft" }),
 });
 
+/** Human-authored tickets (the manual path on the intake screen), inserted as
+ *  `proposed` so they go through the same approval gate as PM-agent output. */
+export const addTickets = mutation({
+  args: {
+    epicId: v.id("epics"),
+    tickets: v.array(v.object({ title: v.string(), body: v.string(), agentType })),
+  },
+  handler: async (ctx, { epicId, tickets }) => {
+    for (const t of tickets) {
+      await ctx.db.insert("tickets", { epicId, ...t, status: "proposed" });
+    }
+    await ctx.db.patch("epics", epicId, { status: "decomposed" });
+    return tickets.length;
+  },
+});
+
+/** Approve the whole proposed set, or just `ticketIds` when the human picked a
+ *  subset on the board. */
 export const approveTickets = mutation({
-  args: { epicId: v.id("epics") },
-  handler: async (ctx, { epicId }) => {
+  args: { epicId: v.id("epics"), ticketIds: v.optional(v.array(v.id("tickets"))) },
+  handler: async (ctx, { epicId, ticketIds }) => {
+    const chosen = ticketIds ? new Set<Id<"tickets">>(ticketIds) : null;
     const tickets = await ctx.db
       .query("tickets")
       .withIndex("by_epic", (q) => q.eq("epicId", epicId))
-      .collect();
+      .take(100);
+
+    let approved = 0;
     for (const t of tickets) {
-      if (t.status === "proposed") await ctx.db.patch(t._id, { status: "approved" });
+      if (t.status !== "proposed") continue;
+      if (chosen && !chosen.has(t._id)) continue;
+      await ctx.db.patch("tickets", t._id, { status: "approved" });
+      approved += 1;
     }
+    return approved;
   },
 });
+
+/** Create the epic's repo up front, so the board has something to link to the
+ *  moment you land on it rather than only after the first run.
+ *
+ *  Returns null instead of throwing when the agent service or the GitHub
+ *  credential is unhappy — an epic with no repo yet is a legitimate state the
+ *  board already renders, and the workflow will try again at run time. */
+export const ensureEpicRepo = action({
+  args: { epicId: v.id("epics") },
+  handler: (ctx, { epicId }): Promise<string | null> => ensureRepoFor(ctx, epicId),
+});
+
+export const runApproved = mutation({
+  args: { epicId: v.id("epics") },
+  handler: async (ctx, { epicId }) => {
+    await ctx.db.patch("epics", epicId, { status: "executing" });
+    await workflow.start(ctx, internal.workflows.executeApproved, { epicId });
+  },
+});
+
+/** The approval gate as one transaction: approve the selected tickets and fan
+ *  them out together. Two separate client calls would leave a window where a
+ *  concurrent `runApproved` sees a half-approved set. */
+export const approveAndRun = mutation({
+  args: { epicId: v.id("epics"), ticketIds: v.optional(v.array(v.id("tickets"))) },
+  handler: async (ctx, { epicId, ticketIds }) => {
+    const chosen = ticketIds ? new Set<Id<"tickets">>(ticketIds) : null;
+    const tickets = await ctx.db
+      .query("tickets")
+      .withIndex("by_epic", (q) => q.eq("epicId", epicId))
+      .take(100);
+
+    let approved = 0;
+    for (const t of tickets) {
+      if (t.status !== "proposed") continue;
+      if (chosen && !chosen.has(t._id)) continue;
+      await ctx.db.patch("tickets", t._id, { status: "approved" });
+      approved += 1;
+    }
+
+    await ctx.db.patch("epics", epicId, { status: "executing" });
+    await workflow.start(ctx, internal.workflows.executeApproved, { epicId });
+    return approved;
+  },
+});
+
+// ---------------------------------------------------------------------------
+// Decomposition
+// ---------------------------------------------------------------------------
 
 // The fixed 12 agent roles. Mirrors the agentType enum in validators.ts; kept
 // as a plain array here so the /agents/decompose response can be validated at
@@ -72,13 +147,14 @@ const FALLBACK_TICKETS: ProposedTicket[] = [
 
 export const proposeDecomposition = action({
   args: { epicId: v.id("epics") },
-  handler: async (ctx, { epicId }) => {
-    const epic = await ctx.runQuery(internal.epics.get, { epicId });
-    if (!epic) return;
+  handler: async (ctx, { epicId }): Promise<{ count: number; usedFallback: boolean }> => {
+    const epic = await ctx.runQuery(api.epics.get, { epicId });
+    if (!epic) return { count: 0, usedFallback: false };
 
     // Any failure — network, non-200, unparseable body, or a ticket whose
     // agentType isn't one of the fixed 12 — degrades to FALLBACK_TICKETS.
     let tickets: ProposedTicket[] = FALLBACK_TICKETS;
+    let usedFallback = true;
     try {
       const res = await fetch(`${process.env.AGENT_SERVICE_URL}/agents/decompose`, {
         method: "POST",
@@ -87,7 +163,10 @@ export const proposeDecomposition = action({
       });
       if (res.ok) {
         const parsed = parseTickets(await res.json());
-        if (parsed) tickets = parsed;
+        if (parsed) {
+          tickets = parsed;
+          usedFallback = false;
+        }
       }
     } catch {
       // fall through to FALLBACK_TICKETS
@@ -101,5 +180,8 @@ export const proposeDecomposition = action({
         agentType: t.agentType,
       });
     }
+    await ctx.runMutation(internal.epics.setStatus, { epicId, status: "decomposed" });
+
+    return { count: tickets.length, usedFallback };
   },
 });

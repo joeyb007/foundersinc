@@ -2,26 +2,20 @@
 
 import {
   ArrowUpDown,
-  CircleCheckBig,
   CircleDot,
-  ChevronDown,
-  Ellipsis,
   GitBranch,
-  Link2,
   ListChecks,
   ListFilter,
-  Lock,
   Play,
-  Plus,
   Search,
   SlidersHorizontal,
   Sparkles,
   Star,
   UserCheck,
-  Zap,
 } from "lucide-react";
+import { useMutation } from "convex/react";
 import { useRouter } from "next/navigation";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useMemo, useState } from "react";
 import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
@@ -29,32 +23,28 @@ import { Checkbox } from "@/components/ui/checkbox";
 import {
   DropdownMenu,
   DropdownMenuContent,
-  DropdownMenuItem,
   DropdownMenuLabel,
   DropdownMenuRadioGroup,
   DropdownMenuRadioItem,
-  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
-import { Separator } from "@/components/ui/separator";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
-import { takeDraft } from "@/lib/intake";
+import { useEpicBoard } from "@/lib/board-data";
 import {
   AGENTS,
   AGENT_TYPES,
   APPROVERS,
   EFFORT_ORDER,
-  EPIC,
   PRIORITY_ORDER,
-  TICKETS,
   type AgentType,
-  type Ticket,
 } from "@/lib/orchestrator";
+import { api } from "../../../convex/_generated/api";
+import type { Id } from "../../../convex/_generated/dataModel";
 
 import { ApprovalQueue, type Approver } from "./approval-queue";
 import { ByStatusView } from "./by-status-view";
@@ -72,81 +62,26 @@ const SORT_LABELS: Record<SortKey, string> = {
   agent: "Agent",
 };
 
-function ToolbarButton({
-  label,
-  children,
-  ...props
-}: React.ComponentProps<typeof Button> & { label: string }) {
-  return (
-    <Tooltip>
-      <TooltipTrigger asChild>
-        <Button variant="ghost" size="icon-sm" aria-label={label} {...props}>
-          {children}
-        </Button>
-      </TooltipTrigger>
-      <TooltipContent>{label}</TooltipContent>
-    </Tooltip>
-  );
-}
-
-export function EpicBoard() {
+export function EpicBoard({ epicId: rawEpicId }: { epicId?: string }) {
   const router = useRouter();
-  const [tickets, setTickets] = useState<Ticket[]>(TICKETS);
+
+  // Everything below the fold is a live Convex subscription: tickets flip
+  // status, log lines stream in, and PR links appear without a refresh or a
+  // single poll. Nothing here simulates progress.
+  const { epic, epicId, tickets, messages, isLoading, isEmpty } =
+    useEpicBoard(rawEpicId);
+  const approveAndRunTickets = useMutation(api.orchestrator.approveAndRun);
+
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [approvers, setApprovers] = useState<Approver[]>(APPROVERS);
   const [query, setQuery] = useState("");
   const [agentFilter, setAgentFilter] = useState<Set<AgentType>>(new Set());
   const [sortKey, setSortKey] = useState<SortKey>("updated");
   const [compact, setCompact] = useState(false);
-  const [epicTitle, setEpicTitle] = useState(EPIC.title);
   // Track the id, not the object, so the panel follows its run as it advances.
   const [panelId, setPanelId] = useState<string | null>(null);
-  const prCounter = useRef(43);
 
-  // A breakdown drafted on the intake screen at / is handed over through
-  // sessionStorage. Draining it here — once, on mount — drops the new tickets
-  // in at the top of All tickets with the set already selected, so the
-  // approve-and-run bar is one click away without leaving the default view.
-  //
-  // This has to be an effect rather than lazy state: sessionStorage doesn't
-  // exist during the server render, so reading it in an initializer would
-  // hydrate a different tree than the server sent. Reading a one-shot handoff
-  // out of browser storage is the external-system case the rule carves out for.
-  /* eslint-disable react-hooks/set-state-in-effect */
-  useEffect(() => {
-    const draft = takeDraft();
-    if (!draft) return;
-    setEpicTitle(draft.title);
-    setTickets((current) => [...draft.tickets, ...current]);
-    setSelected(new Set(draft.tickets.map((ticket) => ticket.id)));
-  }, []);
-  /* eslint-enable react-hooks/set-state-in-effect */
-
-  // Runs advance on their own — this is what makes the parallelism visible.
-  useEffect(() => {
-    const timer = setInterval(() => {
-      setTickets((current) =>
-        current.map((ticket) => {
-          if (ticket.status !== "running") return ticket;
-          const next = Math.min(100, (ticket.progress ?? 0) + 3);
-          if (next < 100) {
-            return { ...ticket, progress: next, updatedAt: new Date().toISOString() };
-          }
-          const prNumber = prCounter.current++;
-          return {
-            ...ticket,
-            status: "done",
-            progress: 100,
-            prNumber,
-            prUrl: `https://github.com/${EPIC.repo}/pull/${prNumber}`,
-            updatedAt: new Date().toISOString(),
-          };
-        })
-      );
-    }, 2000);
-    return () => clearInterval(timer);
-  }, []);
-
+  const epicTitle = epic?.title ?? "Epic board";
   const panelTicket = tickets.find((t) => t.id === panelId) ?? null;
 
   const visible = useMemo(() => {
@@ -174,6 +109,13 @@ export function EpicBoard() {
       }
     });
   }, [tickets, query, agentFilter, sortKey]);
+
+  // Only the roles this epic actually routed to. The roster is twelve; showing
+  // all of them would drown the handful that are live.
+  const presentTypes = useMemo(
+    () => AGENT_TYPES.filter((type) => tickets.some((t) => t.agentType === type)),
+    [tickets],
+  );
 
   const proposedCount = tickets.filter((t) => t.status === "proposed").length;
   const runningCount = tickets.filter((t) => t.status === "running").length;
@@ -211,82 +153,64 @@ export function EpicBoard() {
     );
   }
 
-  /** The gate: approved tickets start running together, not one at a time. */
-  function approveAndRun(ids: string[]) {
-    if (ids.length === 0) return;
-    setTickets((current) =>
-      current.map((ticket) =>
-        ids.includes(ticket.id) && ticket.status === "proposed"
-          ? {
-              ...ticket,
-              status: "running",
-              progress: 0,
-              updatedAt: new Date().toISOString(),
-            }
-          : ticket
-      )
-    );
+  /** The gate: one mutation approves the selected tickets and fans them out
+   *  together, so they genuinely start in parallel rather than in sequence. */
+  async function approveAndRun(ids: string[]) {
+    if (!epicId || ids.length === 0) return;
     setSelected(new Set());
-    toast.success(
-      `${ids.length} ${ids.length === 1 ? "ticket" : "tickets"} running in parallel`,
-      { description: "Each agent opens a PR when its work lands." }
+    try {
+      const approved = await approveAndRunTickets({
+        epicId,
+        ticketIds: ids as Id<"tickets">[],
+      });
+      toast.success(
+        `${approved} ${approved === 1 ? "ticket" : "tickets"} running in parallel`,
+        { description: "Each agent opens a PR when its work lands." }
+      );
+    } catch (error) {
+      toast.error("Could not start the run", {
+        description: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  if (isLoading) {
+    return (
+      <div className="flex min-h-full items-center justify-center">
+        <p className="text-sm text-muted-foreground">Connecting to Convex…</p>
+      </div>
     );
   }
 
-  function runAllApproved() {
-    const ids = tickets.filter((t) => t.status === "approved").map((t) => t.id);
-    if (ids.length === 0) {
-      toast.info("Nothing approved yet", {
-        description: "Approve tickets in the approval queue first.",
-      });
-      return;
-    }
-    setTickets((current) =>
-      current.map((ticket) =>
-        ids.includes(ticket.id)
-          ? {
-              ...ticket,
-              status: "running",
-              progress: 0,
-              updatedAt: new Date().toISOString(),
-            }
-          : ticket
-      )
+  if (isEmpty || !epicId) {
+    return (
+      <div className="mx-auto flex min-h-full max-w-md flex-col justify-center gap-3 px-6 text-center">
+        <h1 className="text-lg font-semibold">No epics yet</h1>
+        <p className="text-sm text-muted-foreground">
+          Submit an epic and the PM agent breaks it into a ticket set you can
+          approve. Everything after that runs here, live.
+        </p>
+        <div>
+          <Button size="sm" onClick={() => router.push("/")}>
+            <Sparkles data-icon="inline-start" />
+            New epic
+          </Button>
+        </div>
+      </div>
     );
-    toast.success(`Started ${ids.length} approved ${ids.length === 1 ? "ticket" : "tickets"}`);
   }
 
   return (
     <div className="flex min-h-full flex-col bg-background">
       {/* Page chrome */}
       <header className="sticky top-0 z-20 flex h-11 items-center gap-2 border-b bg-background/95 px-3 backdrop-blur">
-        <CircleCheckBig className="size-4 shrink-0 text-emerald-600" />
-        <span className="truncate text-sm font-medium">{epicTitle}</span>
-        <Separator orientation="vertical" className="h-4" />
-        <span className="flex shrink-0 items-center gap-1 text-xs text-muted-foreground">
-          <Lock className="size-3" />
-          Private
-          <ChevronDown className="size-3" />
-        </span>
-
-        <div className="ml-auto flex items-center gap-1">
-          <span className="hidden text-xs text-muted-foreground sm:inline">
-            Edited 1h ago
-          </span>
-          <Button variant="ghost" size="sm">
-            <Lock data-icon="inline-start" />
-            Share
-          </Button>
-          <ToolbarButton label="Copy link">
-            <Link2 />
-          </ToolbarButton>
-          <ToolbarButton label="Favorite">
-            <Star />
-          </ToolbarButton>
-          <ToolbarButton label="More">
-            <Ellipsis />
-          </ToolbarButton>
-        </div>
+        <span className="shrink-0 text-sm font-semibold tracking-tight">Cycles</span>
+        <span className="text-muted-foreground/40">/</span>
+        <span className="truncate text-sm text-muted-foreground">{epicTitle}</span>
+        <Button size="sm" className="ml-auto" onClick={() => router.push("/")}>
+          <Sparkles data-icon="inline-start" />
+          New epic
+        </Button>
       </header>
 
       <main className="mx-auto w-full max-w-[1600px] flex-1 px-4 pb-16 sm:px-8">
@@ -304,12 +228,27 @@ export function EpicBoard() {
 
           {/* Epic meta — what this board is actually pointed at. */}
           <div className="mt-4 flex flex-wrap items-center gap-x-5 gap-y-2 text-xs">
+            {/* The repo is created by the first run, so until then there is
+                genuinely nothing to link to. */}
             <span className="flex items-center gap-1.5 text-muted-foreground">
               <GitBranch className="size-3.5" />
-              <span className="font-mono">{EPIC.repo}</span>
+              {epic?.repoUrl ? (
+                <a
+                  href={epic.repoUrl}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="font-mono hover:text-foreground hover:underline"
+                >
+                  {epic.repo}
+                </a>
+              ) : (
+                <span className="font-mono text-muted-foreground/60">
+                  repo created on first run
+                </span>
+              )}
             </span>
             <span className="flex items-center gap-1.5">
-              {AGENT_TYPES.map((type) => (
+              {presentTypes.map((type) => (
                 <Tooltip key={type}>
                   <TooltipTrigger asChild>
                     <span>
@@ -394,7 +333,7 @@ export function EpicBoard() {
                 <PopoverContent align="end" className="w-56">
                   <p className="mb-2 text-xs font-medium">Show agents</p>
                   <div className="grid gap-2">
-                    {AGENT_TYPES.map((type) => (
+                    {presentTypes.map((type) => (
                       <label
                         key={type}
                         className="flex cursor-pointer items-center gap-2 text-sm"
@@ -447,31 +386,6 @@ export function EpicBoard() {
                 </DropdownMenuContent>
               </DropdownMenu>
 
-              <DropdownMenu>
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <DropdownMenuTrigger asChild>
-                      <Button variant="ghost" size="icon-sm" aria-label="Automations">
-                        <Zap />
-                      </Button>
-                    </DropdownMenuTrigger>
-                  </TooltipTrigger>
-                  <TooltipContent>Automations</TooltipContent>
-                </Tooltip>
-                <DropdownMenuContent align="end">
-                  <DropdownMenuLabel>Automations</DropdownMenuLabel>
-                  <DropdownMenuItem onSelect={runAllApproved}>
-                    <Play />
-                    Run every approved ticket
-                  </DropdownMenuItem>
-                  <DropdownMenuSeparator />
-                  <DropdownMenuItem onSelect={() => router.push("/")}>
-                    <Sparkles />
-                    Decompose a new epic
-                  </DropdownMenuItem>
-                </DropdownMenuContent>
-              </DropdownMenu>
-
               <Popover>
                 <Tooltip>
                   <TooltipTrigger asChild>
@@ -517,38 +431,6 @@ export function EpicBoard() {
                   </label>
                 </PopoverContent>
               </Popover>
-
-              <div className="ml-1 flex items-center">
-                <Button
-                  size="sm"
-                  className="rounded-r-none"
-                  onClick={() => router.push("/")}
-                >
-                  <Plus data-icon="inline-start" />
-                  New
-                </Button>
-                <DropdownMenu>
-                  <DropdownMenuTrigger asChild>
-                    <Button
-                      size="icon-sm"
-                      className="rounded-l-none border-l border-l-primary-foreground/20"
-                      aria-label="More new-item options"
-                    >
-                      <ChevronDown />
-                    </Button>
-                  </DropdownMenuTrigger>
-                  <DropdownMenuContent align="end">
-                    <DropdownMenuItem onSelect={() => router.push("/")}>
-                      <Sparkles />
-                      New epic
-                    </DropdownMenuItem>
-                    <DropdownMenuItem onSelect={() => router.push("/")}>
-                      <Plus />
-                      New ticket
-                    </DropdownMenuItem>
-                  </DropdownMenuContent>
-                </DropdownMenu>
-              </div>
             </div>
           </div>
 
@@ -561,7 +443,7 @@ export function EpicBoard() {
               <Button
                 size="xs"
                 onClick={() =>
-                  approveAndRun(
+                  void approveAndRun(
                     [...selected].filter(
                       (id) =>
                         tickets.find((t) => t.id === id)?.status === "proposed"
@@ -595,7 +477,7 @@ export function EpicBoard() {
               onToggle={toggleTicket}
               onToggleAll={toggleAll}
               onOpen={(ticket) => setPanelId(ticket.id)}
-              onNewTicket={() => router.push("/")}
+              epicId={epicId}
             />
           </TabsContent>
 
@@ -611,7 +493,7 @@ export function EpicBoard() {
               onToggle={toggleTicket}
               onToggleApprover={toggleApprover}
               onApproveAndRun={() =>
-                approveAndRun(
+                void approveAndRun(
                   [...selected].filter(
                     (id) => tickets.find((t) => t.id === id)?.status === "proposed"
                   )
@@ -622,13 +504,18 @@ export function EpicBoard() {
           </TabsContent>
 
           <TabsContent value="runs">
-            <RunsBoard tickets={visible} onOpen={(ticket) => setPanelId(ticket.id)} />
+            <RunsBoard
+              tickets={visible}
+              messages={messages}
+              onOpen={(ticket) => setPanelId(ticket.id)}
+            />
           </TabsContent>
         </Tabs>
       </main>
 
       <TicketPanel
         ticket={panelTicket}
+        messages={messages}
         onOpenChange={(open) => !open && setPanelId(null)}
       />
     </div>

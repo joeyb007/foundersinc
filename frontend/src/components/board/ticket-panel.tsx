@@ -11,13 +11,12 @@ import {
 } from "@/components/ui/sheet";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
-import { Progress } from "@/components/ui/progress";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { cn } from "@/lib/utils";
 import {
   AGENTS,
-  MESSAGES,
   formatUpdatedAt,
+  type Message,
   type MessageRole,
   type Ticket,
 } from "@/lib/orchestrator";
@@ -53,12 +52,14 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
 
 export function TicketPanel({
   ticket,
+  messages,
   onOpenChange,
 }: {
   ticket: Ticket | null;
+  messages: Message[];
   onOpenChange: (open: boolean) => void;
 }) {
-  const log = ticket ? MESSAGES.filter((m) => m.ticketId === ticket.id) : [];
+  const log = ticket ? messages.filter((m) => m.ticketId === ticket.id) : [];
   const agent = ticket ? AGENTS[ticket.agentType] : null;
 
   return (
@@ -99,14 +100,14 @@ export function TicketPanel({
                   </span>
                 </span>
               </Field>
-              <Field label="Toolset">
+              <Field label="Focus">
                 <div className="flex flex-wrap gap-1">
-                  {agent.tools.map((tool) => (
+                  {agent.focus.map((item) => (
                     <span
-                      key={tool}
+                      key={item}
                       className="rounded bg-muted px-1.5 py-0.5 font-mono text-[11px] text-muted-foreground"
                     >
-                      {tool}
+                      {item}
                     </span>
                   ))}
                 </div>
@@ -142,15 +143,14 @@ export function TicketPanel({
             {ticket.status === "running" && (
               <div className="px-4 pb-3">
                 <div className="mb-1.5 flex items-baseline justify-between">
-                  <span className="text-xs text-muted-foreground">Progress</span>
+                  <span className="text-xs text-muted-foreground">Working</span>
                   <span className="font-mono text-xs text-amber-700">
-                    {ticket.progress ?? 0}%
+                    {ticket.steps} {ticket.steps === 1 ? "step" : "steps"}
                   </span>
                 </div>
-                <Progress
-                  value={ticket.progress ?? 0}
-                  className="h-1.5 bg-amber-100 *:data-[slot=progress-indicator]:bg-amber-500"
-                />
+                <div className="h-1.5 overflow-hidden rounded-full bg-amber-100">
+                  <div className="h-full animate-pulse rounded-full bg-amber-500" />
+                </div>
               </div>
             )}
 
@@ -164,6 +164,19 @@ export function TicketPanel({
                     <ExternalLink data-icon="inline-end" />
                   </a>
                 </Button>
+              </div>
+            )}
+
+            {/* The documented fallback: when the PR hop fails the agent returns
+                a raw diff instead, and it would otherwise be invisible. */}
+            {!ticket.prUrl && ticket.diff && (
+              <div className="px-4 pb-3">
+                <p className="mb-1.5 text-xs text-muted-foreground">
+                  No PR — the agent returned a diff
+                </p>
+                <pre className="max-h-48 overflow-auto rounded-md border bg-muted/40 p-2 font-mono text-[11px] leading-relaxed whitespace-pre">
+                  {ticket.diff}
+                </pre>
               </div>
             )}
 

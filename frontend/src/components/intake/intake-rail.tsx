@@ -72,6 +72,7 @@ export function IntakeRail({
   onRerun,
   onReplace,
   onCommit,
+  opening,
 }: {
   phase: IntakePhase;
   doc: SourceDoc | null;
@@ -88,6 +89,8 @@ export function IntakeRail({
   onRerun: () => void;
   onReplace: () => void;
   onCommit: () => void;
+  /** Creating the epic's GitHub repo before the board opens. */
+  opening?: boolean;
 }) {
   return (
     <aside className="flex w-[19rem] shrink-0 flex-col overflow-y-auto border-l bg-background">
@@ -197,9 +200,12 @@ export function IntakeRail({
             </Section>
 
             <div className="grid gap-2">
-              <Button onClick={onCommit}>
-                Open full board
-                <ArrowRight data-icon="inline-end" />
+              {/* Opening the board also creates this epic's GitHub repo, which
+                  is a network round-trip — say so rather than appearing to
+                  hang on a plain navigation. */}
+              <Button onClick={onCommit} disabled={opening}>
+                {opening ? "Creating repo…" : "Open full board"}
+                {!opening && <ArrowRight data-icon="inline-end" />}
               </Button>
               <Button variant="ghost" size="sm" onClick={onRerun}>
                 <RotateCcw data-icon="inline-start" />

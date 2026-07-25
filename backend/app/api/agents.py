@@ -1,15 +1,22 @@
 import asyncio
 import logging
-import os
 import shutil
 
-from fastapi import APIRouter, BackgroundTasks
+from fastapi import APIRouter, BackgroundTasks, HTTPException
 from pydantic import BaseModel
 
 from app import convex_client
 from app.agents.base import decompose_epic, run_coding_agent
 from app.agents.configs import AGENT_CONFIGS
-from app.agents.repo import NoChangesError, RepoError, clone_and_branch, commit_push_pr, diff_fallback
+from app.agents.repo import (
+    NoChangesError,
+    RepoError,
+    clone_and_branch,
+    commit_push_pr,
+    diff_fallback,
+    ensure_repo,
+    redact,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -48,10 +55,19 @@ class RunRequest(BaseModel):
     agentType: str
     title: str
     body: str
+    repoUrl: str
 
 
 class RunAccepted(BaseModel):
     accepted: bool = True
+
+
+class EnsureRepoRequest(BaseModel):
+    title: str
+
+
+class EnsureRepoResult(BaseModel):
+    repoUrl: str
 
 
 class DecomposeRequest(BaseModel):
@@ -69,7 +85,9 @@ class DecomposeResult(BaseModel):
     tickets: list[Ticket]
 
 
-async def execute_ticket(ticket_id: str, run_id: str, agent_type: str, title: str, body: str) -> None:
+async def execute_ticket(
+    ticket_id: str, run_id: str, agent_type: str, title: str, body: str, repo_url: str
+) -> None:
     """Background job: clone+branch -> run the coding agent -> commit/push/PR ->
     finalize the run in Convex.
 
@@ -83,9 +101,7 @@ async def execute_ticket(ticket_id: str, run_id: str, agent_type: str, title: st
     finish_kwargs: dict[str, str | None] = {}
     try:
         persona = AGENT_CONFIGS[agent_type]
-        target_repo = os.environ["TARGET_REPO"]
-
-        workdir, branch = clone_and_branch(target_repo, agent_type)
+        workdir, branch = clone_and_branch(repo_url, agent_type)
 
         def on_log(line: str) -> None:
             _safe_append_message(ticket_id, "agent", line)
@@ -102,29 +118,57 @@ async def execute_ticket(ticket_id: str, run_id: str, agent_type: str, title: st
             finish_kwargs = {}
         except RepoError as e:
             diff = diff_fallback(workdir)
-            _safe_append_message(ticket_id, "system", f"PR failed ({e}); returning diff")
+            _safe_append_message(ticket_id, "system", f"PR failed ({redact(str(e))}); returning diff")
             finish_kwargs = {"diff": diff}
     except Exception as e:  # noqa: BLE001 - last-resort guard so the run never hangs
+        # Every string here is headed for the run log and the board, so redact
+        # again at the boundary: an exception from outside `repo._run` (an
+        # httpx error, say) hasn't been through the scrubber yet.
+        message = redact(str(e))
         diff = _best_effort_diff(workdir)
-        _safe_append_message(ticket_id, "system", f"agent run failed: {e}")
-        finish_kwargs = {"diff": diff if diff is not None else f"agent error: {e}"}
+        _safe_append_message(ticket_id, "system", f"agent run failed: {message}")
+        finish_kwargs = {"diff": diff if diff is not None else f"agent error: {message}"}
     finally:
         if workdir is not None:
             shutil.rmtree(workdir, ignore_errors=True)
         _safe_finish_run(run_id, **finish_kwargs)
 
 
-def _run_execute_ticket(ticket_id: str, run_id: str, agent_type: str, title: str, body: str) -> None:
+def _run_execute_ticket(
+    ticket_id: str, run_id: str, agent_type: str, title: str, body: str, repo_url: str
+) -> None:
     """Sync entry point for BackgroundTasks: drives the async job to completion."""
-    asyncio.run(execute_ticket(ticket_id, run_id, agent_type, title, body))
+    asyncio.run(execute_ticket(ticket_id, run_id, agent_type, title, body, repo_url))
 
 
 @router.post("/run", response_model=RunAccepted, status_code=202)
 def run(req: RunRequest, background_tasks: BackgroundTasks) -> RunAccepted:
     background_tasks.add_task(
-        _run_execute_ticket, req.ticketId, req.runId, req.agentType, req.title, req.body
+        _run_execute_ticket,
+        req.ticketId,
+        req.runId,
+        req.agentType,
+        req.title,
+        req.body,
+        req.repoUrl,
     )
     return RunAccepted()
+
+
+@router.post("/repos/ensure", response_model=EnsureRepoResult)
+def repos_ensure(req: EnsureRepoRequest) -> EnsureRepoResult:
+    """Create the throwaway repo an epic's agents will share.
+
+    Runs as its own workflow step *before* the fan-out, so the parallel agents
+    can't race each other into creating one repo apiece. Synchronous on
+    purpose: the fan-out has nothing to clone until this returns.
+    """
+    try:
+        return EnsureRepoResult(repoUrl=ensure_repo(req.title))
+    except RepoError as e:
+        raise HTTPException(status_code=502, detail=redact(str(e))) from e
+    except KeyError as e:  # GITHUB_TOKEN unset
+        raise HTTPException(status_code=500, detail=f"missing env var: {e}") from e
 
 
 @router.post("/decompose", response_model=DecomposeResult)
