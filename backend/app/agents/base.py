@@ -26,8 +26,10 @@ MODEL = os.environ.get("AGENT_MODEL", "claude-haiku-4-5")
 
 # Real coding-agent runs can take minutes; cap turns so a single ticket can't
 # run away with the process (also bounds cost/blast-radius alongside the
-# per-run isolated git checkout + bypassPermissions).
-MAX_TURNS = 30
+# per-run isolated git checkout + bypassPermissions). 30 proved too tight for
+# a real ticket — explore + write + test + commit + `gh pr create` overran it
+# and every run died mid-flight with no PR.
+MAX_TURNS = 100
 
 OnLog = Callable[[str], None]
 
@@ -163,11 +165,15 @@ def decompose_epic(title: str, body: str) -> list[dict]:
     """Plain Anthropic Messages call (NOT the Agent SDK) — JSON classification."""
     resp = _client.messages.create(
         model=MODEL,
-        max_tokens=1200,
+        # Sized for a wide epic: ~12 tickets with multi-sentence bodies. A cap
+        # that's too low truncates the JSON mid-string and 500s the endpoint.
+        max_tokens=8192,
         system=_DECOMPOSE_SYSTEM,
         output_config={"format": {"type": "json_schema", "schema": _DECOMPOSE_SCHEMA}},
         messages=[{"role": "user", "content": f"Epic: {title}\n\n{body}"}],
     )
     text = next((b.text for b in resp.content if b.type == "text"), "{}")
     tickets = _loads_tolerant(text)["tickets"]
-    return [t for t in tickets if t.get("agentType") in _VALID_AGENT_TYPES][:4]
+    # Cap matches the board's maxParallelism ceiling, not an arbitrary 4 — a
+    # spec with one section per specialist should decompose one-to-one.
+    return [t for t in tickets if t.get("agentType") in _VALID_AGENT_TYPES][:12]

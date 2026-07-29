@@ -150,11 +150,24 @@ def commit_push_pr(workdir: str, branch: str, title: str) -> str | None:
     diff_check = subprocess.run(
         ["git", "status", "--porcelain"], cwd=workdir, capture_output=True, text=True
     )
-    if not diff_check.stdout.strip():
-        raise NoChangesError("no changes to commit")
+    if diff_check.stdout.strip():
+        _run(["git", "add", "-A"], cwd=workdir)
+        _run(["git", "commit", "-m", title], cwd=workdir)
 
-    _run(["git", "add", "-A"], cwd=workdir)
-    _run(["git", "commit", "-m", title], cwd=workdir)
+    # Agents also wander off the branch mid-run (checkout main, new branches).
+    # The work lives wherever HEAD is; the push targets `branch`. Reseat the
+    # branch on HEAD so the two can't diverge — otherwise the push ships an
+    # empty ref and `gh pr create` fails with "no commits between".
+    _run(["git", "checkout", "-B", branch], cwd=workdir)
+
+    # A clean tree does not mean no work: agents routinely `git commit` their
+    # own changes mid-run. Push-vs-skip is decided by whether the branch holds
+    # commits the base doesn't — the only signal that survives either style.
+    ahead = _run(
+        ["git", "rev-list", "--count", "origin/HEAD..HEAD"], cwd=workdir
+    ).stdout.strip()
+    if ahead == "0":
+        raise NoChangesError("no changes to commit")
 
     # Push to the authenticated URL explicitly rather than to `origin`, so the
     # credential never has to live in .git/config.
